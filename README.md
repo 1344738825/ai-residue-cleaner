@@ -5,7 +5,27 @@ ZCode 插件 + DeepSeek Harness (cordis) 双端组合包:自动清运 AI 会话�
 - **ZCode 桌面端 / dsh**:仓库根级就是组合包(`package.json` 的 `dsh.bundle.patch` 申明 + `cordis.patch.yml` + `index.js`),客户端直接从 Git 仓库安装;`turn/end` 后台清运,首条消息注入输出守则,详见 [adapters/dsh/README.md](adapters/dsh/README.md)。
 - **ZCode CLI 端**:`hooks/hooks.json` + Python 钩子(Stop/UserPromptSubmit 事件)。
 
-## 项目制(v0.2.0)
+## 安装
+
+**方式一:作为插件市场添加(ZCode / DeepSeek Harness 系客户端通用)**
+
+仓库根目录即市场清单(`marketplace.json`,`source: "."`,与 ai-look-up 同构)。客户端里 **Plugin Marketplace → 添加 → 添加插件市场**,粘贴本仓库地址(Git URL 或本地目录),然后在 **个人 → residue-cleaner-market** 中安装「AI 残渣清运」。
+
+**方式二:Git 仓库直装(桌面端插件页)**
+
+插件页直接粘贴 `https://github.com/1344738825/ai-residue-cleaner`,客户端会以 cordis 组合包(`package.json` 的 `dsh.bundle.patch` 申明)把仓库装成 Host 插件。
+
+两种方式的差异:
+
+| | 方式一(市场) | 方式二(直装) |
+|---|---|---|
+| CLI 端 Python 钩子(Stop/UserPromptSubmit) | 生效 | 不生效 |
+| 桌面/DSH 端 JS bundle(turn/end 后台清运 + 首条消息守则注入) | 生效 | 生效 |
+| 依赖 | 需要系统 `python` 命令(3.8+;可执行名不同可改 `hooks/hooks.json` 4 处) | JS 端清运需要 `python`;缺失时清运静默跳过,守则注入不受影响 |
+
+`/residue-open`、`/residue-close`、`/residue-trash` 三个命令随插件安装,两个方式都可用。
+
+## 项目制
 
 在项目根 `.ai-residue.json` 里声明:
 
