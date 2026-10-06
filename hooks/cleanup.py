@@ -20,9 +20,14 @@
 项目制(.ai-residue.json 的 project 块):
   {"project": {"status": "open", "deliverables_dir": "产出"}}
   status=open 时 Stop 钩子不自动清运(副产物原地保留),产出目录始终受保护;
-  close 时把产出目录根一层的成品按扩展名归入分类子目录(默认
-  文稿/视频成品/音频/图片/数据,可用 "categories" 覆盖),再清运全部副产物,
-  并在产出目录写《结项清理清单-<时间>.txt》记录被删文件,最后 status 置 closed。
+  close 时按四步收尾:
+    1) 产出目录根一层成品按扩展名归类(默认 文稿/视频成品/音频/图片/数据,
+       可用 "categories" 覆盖);
+    2) 可引用的中间产物(*_results.*、*_dump* 等,可用 "archive_rules" 追加)
+       移入归档目录("archive_dir",默认 归档/)——永不进回收站、不会真删;
+    3) 清运其余副产物(含产出目录内);
+    4) 在产出目录写《结项清理清单-<时间>.txt》记录归类/归档/被删清单,
+       status 置 closed。
 
 保护规则:
   - 永不进入 .git / node_modules / .zcode / .agents / .claude / 虚拟环境;
@@ -54,9 +59,6 @@ PROTECTED_DIRS = {
 # (类别, 目标类型 file|dir|any, glob, 范围 top|tree)
 DEFAULT_RULES = [
     ("草稿",   "any",  "_*",             "top"),   # _probe.py / _peek2.png / _dsh_acp …
-    ("草稿",   "file", "*_results.txt",  "top"),
-    ("草稿",   "file", "*_results.json", "top"),
-    ("草稿",   "file", "*_dryrun.txt",   "top"),
     ("草稿",   "any",  "scratch*",       "top"),
     ("渲染图", "file", "page[-_]*.png",  "top"),
     ("渲染图", "file", "page[-_]*.jpg",  "top"),
@@ -80,6 +82,18 @@ DEFAULT_RULES = [
     ("缓存",   "dir",  ".ipynb_checkpoints", "tree"),
 ]
 
+# 归档:中途可能还要引用的中间产物(探测结果、dump 等)。
+# 永不进回收站、不参与保留期真删;结项时移入归档目录,日常清运也不碰。
+# 可在 .ai-residue.json 用 "archive_rules": [{"pattern":..., "scope":...}] 追加。
+DEFAULT_ARCHIVE_RULES = [
+    ("*_results.txt",  "top"),
+    ("*_results.json", "top"),
+    ("*_results.csv",  "top"),
+    ("*_dryrun.txt",   "top"),
+    ("*_dump*",        "top"),
+]
+ARCHIVE_DIR_DEFAULT = "归档"
+
 
 def load_config(project: Path):
     cfg = {
@@ -87,6 +101,8 @@ def load_config(project: Path):
         "extra_rules": [],
         "project": None,        # {"status": "open"|"closed", "deliverables_dir": "产出"}
         "categories": None,     # 结项归类映射,覆盖默认: {"文稿": [".docx", ...], ...}
+        "archive_dir": None,    # 归档目录名,默认 "归档"
+        "archive_rules": [],    # 追加的归档规则 [{"pattern":..., "scope": "top"|"tree"}]
     }
     path = project / CONFIG_NAME
     if path.is_file():
@@ -100,6 +116,10 @@ def load_config(project: Path):
                 cfg["project"] = data["project"]
             if isinstance(data.get("categories"), dict):
                 cfg["categories"] = data["categories"]
+            if isinstance(data.get("archive_dir"), str) and data["archive_dir"].strip():
+                cfg["archive_dir"] = data["archive_dir"].strip("/\\")
+            if isinstance(data.get("archive_rules"), list):
+                cfg["archive_rules"] = [r for r in data["archive_rules"] if isinstance(r, dict) and r.get("pattern")]
         except (ValueError, OSError) as exc:
             note(stderr, "配置文件读取失败,使用默认规则: %s" % exc)
     return cfg
@@ -121,6 +141,14 @@ def in_output(rel: str, out_rel: str | None) -> bool:
     return bool(out_rel) and (rel == out_rel or rel.startswith(out_rel.replace("\\", "/") + "/"))
 
 
+def archive_rel(cfg) -> str:
+    return cfg.get("archive_dir") or ARCHIVE_DIR_DEFAULT
+
+
+def in_archive(rel: str, a_rel: str) -> bool:
+    return rel == a_rel or rel.startswith(a_rel + "/")
+
+
 # 结项归类:默认按扩展名;可在 .ai-residue.json 用 "categories" 覆盖
 DEFAULT_CATEGORIES = [
     ("文稿",     {".docx", ".doc", ".pdf", ".txt", ".md", ".wps", ".odt", ".rtf"}),
@@ -130,6 +158,71 @@ DEFAULT_CATEGORIES = [
     ("数据",     {".csv", ".xlsx", ".xls", ".json", ".sqlite", ".db"}),
 ]
 REPORT_PREFIX = "结项清理清单"
+
+# 结果引用:成品文本内部的相对路径引用。归类时把被引用的资产跟着成品
+# 一起搬进分类目录并改写引用路径,保证清运之后成品仍然自包含、可打开。
+TEXT_DELIVERABLE_EXTS = {".md", ".markdown", ".html", ".htm", ".tex"}
+REF_PATTERNS = [
+    re.compile(r"\]\(([^)\s]+)\)"),                                   # Markdown 链接/图片
+    re.compile(r"""(?:src|href|poster)=["']([^"']+)["']""", re.I),    # HTML
+    re.compile(r"\\(?:includegraphics|input|include)\{([^}]+)\}"),    # LaTeX
+]
+REF_SKIP_PREFIXES = ("#", "http://", "https://", "mailto:", "data:", "{{", "$")
+ASSET_DIR_NAME = "_assets"
+
+
+def extract_rel_refs(text: str):
+    refs = []
+    for rx in REF_PATTERNS:
+        for m in rx.finditer(text):
+            token = m.group(1).strip()
+            if not token or token.startswith(REF_SKIP_PREFIXES):
+                continue
+            if re.match(r"^[a-zA-Z]:[\\/]", token) or token.startswith("/"):
+                continue  # 绝对路径不动
+            if token not in refs:
+                refs.append(token)
+    return refs
+
+
+def _within_project(project: Path, target: Path) -> bool:
+    try:
+        target.resolve().relative_to(project.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def relocate_linked_assets(project: Path, old_dir: Path, dest: Path, text: str):
+    """把成品 dest(刚从 old_dir 搬来)引用到的本地资产搬进 dest 同级的 _assets/ 并改写引用。
+
+    返回 (改写后的文本, [(资产名, 原相对路径)]),失败逐项降级(资产不动,引用不改)。
+    """
+    dest_dir = dest.parent
+    moved_assets = []
+    for token in extract_rel_refs(text):
+        source = (old_dir / token).resolve()
+        if not source.is_file() or not _within_project(project, source):
+            continue
+        if dest_dir in source.parents or source.parent == dest_dir:
+            continue  # 已在成品目录内,无需搬
+        base = source.name
+        stem, suffix = os.path.splitext(base)
+        asset_dest = dest_dir / ASSET_DIR_NAME / base
+        i = 1
+        while asset_dest.exists():
+            asset_dest = dest_dir / ASSET_DIR_NAME / ("%s_%d%s" % (stem, i, suffix))
+            i += 1
+        try:
+            asset_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(asset_dest))
+        except (shutil.Error, OSError) as exc:
+            note(stderr, "残渣清运:引用资产搬运失败 %s (%s)" % (token, exc))
+            continue
+        new_token = "%s/%s" % (ASSET_DIR_NAME, asset_dest.name)
+        text = text.replace(token, new_token)
+        moved_assets.append((asset_dest.name, token))
+    return text, moved_assets
 
 
 def note(stream, text):
@@ -214,9 +307,10 @@ def collect(project: Path, ignores, out_rel=None, include_output=False):
     cfg = load_config(project)
     if out_rel is None:
         out_rel = output_rel(cfg)
+    a_rel = archive_rel(cfg)
     seen = {}
     for entry, category, rel in iter_candidates(project, ignores, out_rel, include_output):
-        if rel in seen:
+        if rel in seen or in_archive(rel, a_rel):
             continue
         seen[rel] = (entry, category)
     for rule in cfg["extra_rules"]:
@@ -244,6 +338,8 @@ def collect(project: Path, ignores, out_rel=None, include_output=False):
             if rel in seen or is_ignored(rel, entry.name, ignores):
                 continue
             if not include_output and in_output(rel, out_rel):
+                continue
+            if in_archive(rel, a_rel):
                 continue
             seen[rel] = (entry, category)
     return seen, cfg
@@ -318,21 +414,24 @@ def purge(project: Path, retention_days: int):
 def classify_output(project: Path, cfg, dry_run: bool):
     """结项第一步:把产出目录根一层的成品按扩展名归入分类子目录。
 
-    返回 (归类成功的 [(文件名, 分类)], 冲突跳过的 [(文件名, 分类)])。
+    文本成品内的相对路径引用会把资产一并搬进 _assets/ 并改写引用,
+    保证结项清扫后成品仍然自包含。
+    返回 (归类 [(文件名, 分类)], 冲突跳过 [(文件名, 分类)],
+          引用资产 [(成品名, 资产名, 原引用)]).
     目录、清单文件本身、无匹配扩展名的文件一律不动。
     """
     out_rel = output_rel(cfg)
     if not out_rel:
-        return [], []
+        return [], [], []
     out_dir = project / out_rel
     if not out_dir.is_dir():
-        return [], []
+        return [], [], []
     if cfg.get("categories"):
         categories = [(name, {e.lower() for e in exts})
                       for name, exts in cfg["categories"].items()]
     else:
         categories = DEFAULT_CATEGORIES
-    moved, skipped = [], []
+    moved, skipped, linked = [], [], []
     for entry in sorted(out_dir.iterdir()):
         if not entry.is_file() or entry.is_symlink():
             continue
@@ -349,22 +448,84 @@ def classify_output(project: Path, cfg, dry_run: bool):
                 break
             if dry_run:
                 moved.append((entry.name, cat_name))
+                break
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.move(str(entry), str(dest))
+                moved.append((entry.name, cat_name))
+            except (shutil.Error, OSError) as exc:
+                note(stderr, "残渣清运:归类失败 %s (%s)" % (entry.name, exc))
+                break
+            if ext in TEXT_DELIVERABLE_EXTS:
+                try:
+                    text = dest.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    break
+                text, assets = relocate_linked_assets(project, entry.parent, dest, text)
+                if assets:
+                    try:
+                        dest.write_text(text, encoding="utf-8")
+                    except OSError as exc:
+                        note(stderr, "残渣清运:引用改写失败 %s (%s)" % (entry.name, exc))
+                for asset_name, token in assets:
+                    linked.append((entry.name, asset_name, token))
+            break
+    return moved, skipped, linked
+
+
+def archive_pass(project: Path, cfg, dry_run: bool):
+    """结项第二步:把可引用的中间产物移入归档目录(保留相对路径)。
+
+    归档条目永不进回收站、不参与保留期真删。返回 (已归档 rel 列表, 冲突跳过列表)。
+    """
+    ignores = load_ignores(project)
+    a_rel = archive_rel(cfg)
+    out = output_rel(cfg)
+    rules = list(DEFAULT_ARCHIVE_RULES)
+    for r in cfg.get("archive_rules") or []:
+        rules.append((r["pattern"], r.get("scope", "top")))
+    moved, skipped, seen = [], [], set()
+    for pattern, scope in rules:
+        if scope == "top":
+            candidates = [p for p in project.glob(pattern) if not p.name.startswith("__")]
+        else:
+            candidates = list(iter_tree(project, pattern))
+        for entry in candidates:
+            if entry == project or not entry.exists():
+                continue
+            if scope == "top" and entry.parent != project:
+                continue
+            try:
+                rel = entry.relative_to(project).as_posix()
+            except ValueError:
+                continue
+            if rel in seen or in_archive(rel, a_rel) or is_ignored(rel, entry.name, ignores):
+                continue
+            if out and in_output(rel, out):
+                continue
+            seen.add(rel)
+            dest = project / a_rel / rel
+            if dest.exists():
+                skipped.append(rel)
+                continue
+            if dry_run:
+                moved.append(rel)
             else:
-                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     shutil.move(str(entry), str(dest))
-                    moved.append((entry.name, cat_name))
+                    moved.append(rel)
                 except (shutil.Error, OSError) as exc:
-                    note(stderr, "残渣清运:归类失败 %s (%s)" % (entry.name, exc))
-            break
+                    note(stderr, "残渣清运:归档失败 %s (%s)" % (rel, exc))
     return moved, skipped
 
 
 def close_project(project: Path, dry_run: bool = False):
-    """结项:归类成品 → 清运副产物(含产出目录内) → 写清理清单 → 标记 closed。"""
+    """结项:归类成品 → 归档可引用产物 → 清运副产物 → 写清理清单 → 标记 closed。"""
     cfg = load_config(project)
     out_rel = output_rel(cfg)
-    classified, conflicts = classify_output(project, cfg, dry_run)
+    classified, conflicts, linked = classify_output(project, cfg, dry_run)
+    archived, archive_conflicts = archive_pass(project, cfg, dry_run)
 
     trash_runs_before = set()
     trash = project / TRASH_NAME
@@ -387,7 +548,7 @@ def close_project(project: Path, dry_run: bool = False):
             swept = [(it["src"], it.get("category", "?")) for it in data.get("items", [])]
 
     if not dry_run:
-        report = build_close_report(cfg, classified, conflicts, swept, run_id)
+        report = build_close_report(cfg, classified, conflicts, linked, archived, archive_conflicts, swept, run_id)
         if out_rel:
             report_path = project / out_rel / ("%s-%s.txt" % (REPORT_PREFIX, time.strftime("%Y%m%d-%H%M%S")))
             report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -399,11 +560,11 @@ def close_project(project: Path, dry_run: bool = False):
         note(sys.stdout, "残渣清运:项目已标记为 closed,常规自动清运恢复。")
     else:
         seen, _ = collect(project, load_ignores(project), include_output=True)
-        note(sys.stdout, "[dry-run] 归类 %d 项,清运 %d 项" % (len(classified), len(seen)))
+        note(sys.stdout, "[dry-run] 归类 %d 项,归档 %d 项,清运 %d 项"
+             % (len(classified), len(archived), len(seen)))
     return classified, swept
 
-
-def build_close_report(cfg, classified, conflicts, swept, run_id):
+def build_close_report(cfg, classified, conflicts, linked, archived, archive_conflicts, swept, run_id):
     lines = []
     lines.append("结项清理清单  %s" % time.strftime("%Y-%m-%d %H:%M:%S"))
     lines.append("=" * 46)
@@ -416,8 +577,21 @@ def build_close_report(cfg, classified, conflicts, swept, run_id):
         lines.append("  (无可归类的成品)")
     for name, cat in conflicts:
         lines.append("  [冲突跳过] %s → %s(目标位置已有同名文件,请手动处理)" % (name, cat))
+    if linked:
+        lines.append("  引用资产(已随成品搬入 _assets/ 并改写引用,成品保持自包含):")
+        for owner, asset, token in linked:
+            lines.append("    ↳ %s: %s ← %s" % (owner, asset, token))
     lines.append("")
-    lines.append("二、本次删除的副产物(移入回收站,未直接删除)")
+    lines.append("二、已归档(中途需要引用的中间产物,移入 %s/,不进回收站、不会真删)" % archive_rel(cfg))
+    if archived:
+        for rel in archived:
+            lines.append("  %s" % rel)
+    else:
+        lines.append("  (无可归档的中间产物)")
+    for rel in archive_conflicts:
+        lines.append("  [冲突跳过] %s(归档目录已有同名文件)" % rel)
+    lines.append("")
+    lines.append("三、本次删除的副产物(移入回收站,未直接删除)")
     if swept:
         lines.append("  回收站批次: %s" % (run_id or "?"))
         for rel, cat in swept:
@@ -427,8 +601,9 @@ def build_close_report(cfg, classified, conflicts, swept, run_id):
     else:
         lines.append("  (本次没有副产物需要清运)")
     lines.append("")
-    lines.append("三、说明")
-    lines.append("  - 文件只是被移入项目根的 .ai-residue-trash/,结项当下不删除任何内容;")
+    lines.append("四、说明")
+    lines.append("  - 副产物只是被移入项目根的 .ai-residue-trash/,结项当下不删除任何内容;")
+    lines.append("  - 归档内容长期保留在 %s/ 下,可随时引用;" % archive_rel(cfg))
     lines.append("  - 产出目录内未匹配任何成品类型的文件保持原位,未做处理;")
     lines.append("  - 恢复常规自动清运:项目状态已置为 closed。")
     return "\n".join(lines) + "\n"

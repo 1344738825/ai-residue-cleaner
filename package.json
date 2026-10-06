@@ -1,0 +1,17 @@
+{
+  "name": "ai-residue-cleaner",
+  "version": "0.1.0",
+  "description": "AI Residue Cleaner: project-aware janitor for AI byproducts — reversible trash, close-time classification & archive, brevity rule (ZCode plugin + DeepSeek Harness bundle).",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+- insert:
+    - id: ai-residue-cleaner
+      name: 'ai-residue-cleaner'
+      config: {}
