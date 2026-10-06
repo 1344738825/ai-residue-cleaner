@@ -6,9 +6,10 @@
       "source": ".",
       "version": "0.1.0",
       "description": "Sweeps AI byproducts (scratch files, backups, logs, caches) into a reversible trash. Declares a deliverables dir per project, keeps everything until close, then classifies outputs, archives reference results and writes a cleanup report. Also injects a brevity rule to cut filler.",
-      "displayName": "AI Residue Cleaner",
+      "displayName": "AI 残渣清运",
       "displayName_i18n": {
-        "zh-CN": "AI 残渣清运"
+        "zh-CN": "AI 残渣清运",
+        "en": "AI Residue Cleaner"
       },
       "description_i18n": {
         "zh-CN": "把 AI 会话留下的草稿、备份、日志、缓存收进可逆回收站(带清单,可还原)。项目开工后产出固定目录、结项前一切保留;结项时归类成品、归档可引用结果、生成《结项清理清单》。顺带注入输出守则,减少废话。带 /residue-open、/residue-close、/residue-trash。"
