@@ -1,0 +1,11 @@
+{
+  "name": "ai-residue-cleaner",
+  "version": "0.1.0",
+  "description": "Stop-hook janitor for AI byproducts: moves scratch files, backups, render images, logs and cache dirs into a reversible per-project trash folder with manifests, and purges them after a retention period. A UserPromptSubmit hook injects a brevity rule to cut conversational filler. Ships /residue-trash to inspect and restore.",
+  "author": {
+    "name": "shenjingbing"
+  },
+  "license": "MIT",
+  "hooks": "hooks/hooks.json",
+  "commands": "commands"
+}

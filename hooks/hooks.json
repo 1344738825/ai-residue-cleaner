@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/brevity.py\"",
+            "timeout": 10,
+            "statusMessage": "残渣清运:注入输出守则"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/cleanup.py\"",
+            "timeout": 120,
+            "statusMessage": "残渣清运:清扫副产物"
+          }
+        ]
+      }
+    ]
+  }
+}

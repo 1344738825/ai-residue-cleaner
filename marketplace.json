@@ -1,0 +1,19 @@
+{
+  "name": "dev-residue-cleaner",
+  "plugins": [
+    {
+      "name": "ai-residue-cleaner",
+      "source": ".",
+      "version": "0.1.0",
+      "description": "Project-aware janitor for AI byproducts: declares a deliverables dir, suspends auto-cleanup while a project is open, and on close classifies final outputs into category folders, sweeps byproducts into a reversible trash, and writes a text report of everything removed.",
+      "displayName": "AI Residue Cleaner",
+      "displayName_i18n": {
+        "zh-CN": "AI 残渣清运"
+      },
+      "description_i18n": {
+        "zh-CN": "项目制 AI 副产物清运:立项后产出固定目录、未结项副产物原地保留;结项时成品自动归类(文稿/视频成品/音频/图片/数据)、副产物移入可逆回收站,并生成《结项清理清单》文本文档记录被删文件。Stop 钩子自动清运 + 输出守则压制会话废话,带 /residue-open、/residue-close、/residue-trash 命令与 DSH 适配层。"
+      },
+      "category": "productivity"
+    }
+  ]
+}
