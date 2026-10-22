@@ -208,10 +208,12 @@ export function apply(ctx, config) {
         if (cfg.brevityOnFirstMessage && !st.brevityDone
             && typeof agent.inject === 'function') {
           st.brevityDone = true;
+          // 必须走 deliverNotice:裸字符串在部分宿主版本会被存成读不回来的
+          // payload(见 deliverNotice 注释),输出守则会静默失效。
           try {
-            agent.inject(BREVITY_RULE);
+            deliverNotice(agent, BREVITY_RULE);
           } catch (error) {
-            ctx?.logger?.warn?.('[ai-residue-cleaner] agent.inject failed: %o', error);
+            ctx?.logger?.warn?.('[ai-residue-cleaner] brevity inject failed: %o', error);
           }
         }
         return;
