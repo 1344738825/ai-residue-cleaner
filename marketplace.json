@@ -4,7 +4,7 @@
     {
       "name": "ai-residue-cleaner",
       "source": ".",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "description": "Sweeps AI byproducts (scratch files, backups, logs, caches) into a reversible trash. Declares a deliverables dir per project, keeps everything until close, then classifies outputs, archives reference results and writes a cleanup report. Also injects a brevity rule to cut filler.",
       "displayName": "AI 残渣清运",
       "displayName_i18n": {
